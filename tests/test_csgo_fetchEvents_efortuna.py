@@ -1,4 +1,8 @@
-from lambdas.csgo.fetch_events.efortuna_main import extract_event_links
+from pytest_mock import mocker
+
+from lambdas.csgo.fetch_events.efortuna_main import (
+    extract_event_links, send_urls_to_sqs)
+
 
 HTML = '''
 <tbody aria-live="polite" aria-relevant="all">
@@ -34,3 +38,18 @@ def test_event_url_is_extracted():
     events_url = extract_event_links(HTML)
 
     assert ["event0-url", "event1-url"] == events_url
+
+
+def test_message_per_event_is_sent_to_sqs(mocker):
+    sqs_client = mocker.Mock()
+    sqs_queue_url = "https://sqs.eu-west-1.amazonaws.com/2137/kek"
+    urls = ["url0", "url1"]
+
+    expected_msg_0 = {"QueueUrl": sqs_queue_url, "MessageBody": urls[0]}
+    expected_msg_1 = {"QueueUrl": sqs_queue_url, "MessageBody": urls[1]}
+
+    send_urls_to_sqs(sqs_client, sqs_queue_url, urls)
+
+    assert 2 == sqs_client.send_message.call_count
+    assert expected_msg_0 == sqs_client.mock_calls[0][2]
+    assert expected_msg_1 == sqs_client.mock_calls[1][2]
