@@ -31,6 +31,7 @@ def extract_event_links(page_html: str) -> List[str]:
 
 
 def send_urls_to_sqs(sqs_client, sqs_queue_url, urls):
+    # Todo: Follow best practices and initialize SDK outside handler.
     try:
         # Send message to SQS queue for each obtained URL
         for _url in urls:
