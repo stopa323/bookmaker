@@ -4,15 +4,19 @@ import re
 
 from bs4 import BeautifulSoup
 from itertools import chain
+from os import environ
 from typing import List, Union
 from urllib.parse import urljoin
 
+ENVIRONMENT = environ.get("ENVIRONMENT", "dev")
+
 BASE_URL = "https://www.efortuna.pl"
 
-import boto3
+if "prod" == ENVIRONMENT:
+    import boto3
 
-dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('csgo-bets')
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('csgo-bets')
 
 
 async def get_html(session: aiohttp.ClientSession, url: str) -> str:
@@ -202,10 +206,9 @@ def handler(event, ctx):
     loop = asyncio.get_event_loop()
     html_pages = loop.run_until_complete(fetch_event_pages(urls))
     bets = loop.run_until_complete(parse_event_pages(html_pages))
-    print(bets)
 
-    for b in bets:
-        response = table.put_item(Item=b)
-        print(response)
+    if "prod" == ENVIRONMENT:
+        for b in bets:
+            response = table.put_item(Item=b)
 
     return {"statusCode": 200, "bets": bets}
