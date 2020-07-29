@@ -9,6 +9,11 @@ from urllib.parse import urljoin
 
 BASE_URL = "https://www.efortuna.pl"
 
+import boto3
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table('csgo-bets')
+
 
 async def get_html(session: aiohttp.ClientSession, url: str) -> str:
     print(f"Fetching CS:GO event page ({url})")
@@ -111,18 +116,18 @@ def option_rate(value: str) -> float:
 
 
 def build_bet_json(competition_id: str,
-                  match_id: str,
-                  bet_id: str,
-                  bet_type: str,
-                  option_value: str,
-                  option_rate: float) -> dict:
+                   match_id: str,
+                   bet_id: str,
+                   bet_type: str,
+                   option_value: str,
+                   option_rate: float) -> dict:
     bet_json = {
         "competitionID": competition_id,
         "matchID": match_id,
         "betID": bet_id,
         "betType": bet_type,
         "optionValue": option_value,
-        "optionRate": option_rate,
+        "optionRate": str(option_rate),
     }
     return bet_json
 
@@ -131,50 +136,50 @@ async def parse_html(page_html: str) -> List[dict]:
     root = BeautifulSoup(page_html, features="html.parser")
     bets = []
 
-    # try:
-    section = root.find("section")
-    competition_id = section.attrs["data-competition-id"]
-    match_id = section.attrs["data-match-id"]
+    try:
+        section = root.find("section")
+        competition_id = section.attrs["data-competition-id"]
+        match_id = section.attrs["data-match-id"]
 
-    td = root.find_all("td")
+        td = root.find_all("td")
 
-    team1, team2 = td[0].attrs["data-value"].split(" - ")
-    team1 = team_name(team1)
-    team2 = team_name(team2)
+        team1, team2 = td[0].attrs["data-value"].split(" - ")
+        team1 = team_name(team1)
+        team2 = team_name(team2)
 
-    odd1 = td[1].find("a")
-    odd2 = td[2].find("a")
+        odd1 = td[1].find("a")
+        odd2 = td[2].find("a")
 
-    team1_rate = option_rate(odd1.attrs["data-value"])
-    team2_rate = option_rate(odd2.attrs["data-value"])
+        team1_rate = option_rate(odd1.attrs["data-value"])
+        team2_rate = option_rate(odd2.attrs["data-value"])
 
-    bet1_id = odd1.attrs["data-id"]
-    bet2_id = odd2.attrs["data-id"]
+        bet1_id = odd1.attrs["data-id"]
+        bet2_id = odd2.attrs["data-id"]
 
-    bets.append(build_bet_json(competition_id, match_id, bet1_id, "winner",
-                               team1, team1_rate))
-    bets.append(build_bet_json(competition_id, match_id, bet2_id, "winner",
-                               team2, team2_rate))
+        bets.append(build_bet_json(competition_id, match_id, bet1_id, "winner",
+                                   team1, team1_rate))
+        bets.append(build_bet_json(competition_id, match_id, bet2_id, "winner",
+                                   team2, team2_rate))
 
-    for market in root.find_all("div", {"class": "market"}):
-        bet_name = get_bet_name(market.find("h3").find("a").text)
+        for market in root.find_all("div", {"class": "market"}):
+            bet_name = get_bet_name(market.find("h3").find("a").text)
 
-        if not bet_name:
-            print(f"Skipping {bet_name} ({team1} vs {team2})")
-            continue
+            if not bet_name:
+                print(f"Skipping {bet_name} ({team1} vs {team2})")
+                continue
 
-        for option in market.find(
-                "div", {"class": "odds-group"}).find_all("a"):
-            opt_name = get_option_name(
-                bet_name, option.find("span", {"class": "odds-name"}).next)
-            opt_value = option_rate(
-                option.attrs["data-value"])
-            bet_id = option.attrs["data-id"]
-            bets.append(build_bet_json(competition_id, match_id, bet_id,
-                                       bet_name, opt_name, opt_value))
-    # except Exception as exc:
-    #     print(exc)
-    #     return bets
+            for option in market.find(
+                    "div", {"class": "odds-group"}).find_all("a"):
+                opt_name = get_option_name(
+                    bet_name, option.find("span", {"class": "odds-name"}).next)
+                opt_value = option_rate(
+                    option.attrs["data-value"])
+                bet_id = option.attrs["data-id"]
+                bets.append(build_bet_json(competition_id, match_id, bet_id,
+                                           bet_name, opt_name, opt_value))
+    except Exception as exc:
+        print(exc)
+        return bets
 
     return bets
 
@@ -197,5 +202,10 @@ def handler(event, ctx):
     loop = asyncio.get_event_loop()
     html_pages = loop.run_until_complete(fetch_event_pages(urls))
     bets = loop.run_until_complete(parse_event_pages(html_pages))
+    print(bets)
+
+    for b in bets:
+        response = table.put_item(Item=b)
+        print(response)
 
     return {"statusCode": 200, "bets": bets}
