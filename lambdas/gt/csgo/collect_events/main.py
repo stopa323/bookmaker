@@ -3,18 +3,20 @@ import asyncio
 import datetime
 import re
 
+from boto3.dynamodb.conditions import Attr
 from bs4 import BeautifulSoup
 from hashlib import sha256
 from os import environ
 from uuid import uuid4
 
 
-ENVIRONMENT = environ.get("ENVIRONMENT", "dev")
-if "prod" == ENVIRONMENT:
+DYNAMO_TABLE_NAME = environ.get("DYNAMO_TABLE_NAME")
+
+if DYNAMO_TABLE_NAME:
     import boto3
 
     dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('efortuna-csgo-bets')
+    table = dynamodb.Table(DYNAMO_TABLE_NAME)
 
 URL = "https://en.game-tournaments.com/csgo/matches"
 
@@ -41,7 +43,7 @@ def parse_events(html: str):
 
             title = name_tag.attrs["title"]
             title = normalize_event_name(title)
-            if "tbd - tbd" == title:
+            if "tbd" in title:
                 continue
 
             match_obj = build_match_object(title, date, link)
@@ -77,15 +79,24 @@ def normalize_event_name(name: str):
     return f"{name.group(1)} - {name.group((2))}"
 
 
+def upsert_db_item(event):
+    response = table.scan(
+        FilterExpression=Attr("dataSource").eq("game-tournaments") &
+                         Attr("eventSHA").eq(event["eventSHA"]))
+    if response["Items"]:
+        table.delete_item(Key={"id": response["Items"][0]["id"]})
+
+    # Todo: Consider using update
+    table.put_item(Item=event)
+
+
 def handler(event, ctx):
     loop = asyncio.get_event_loop()
     html_page = loop.run_until_complete(fetch_page())
     results = parse_events(html_page)
 
-    if "prod" == ENVIRONMENT:
+    if DYNAMO_TABLE_NAME:
         for r in results:
-            table.put_item(Item=r)
+            upsert_db_item(r)
 
     return {"statusCode": 200}
-
-handler(None, None)
