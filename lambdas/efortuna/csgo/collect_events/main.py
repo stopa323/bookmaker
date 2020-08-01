@@ -1,16 +1,22 @@
 import aiohttp
 import asyncio
+import datetime
+import re
 
+
+from boto3.dynamodb.conditions import Attr
 from bs4 import BeautifulSoup
+from hashlib import sha256
 from os import environ
+from uuid import uuid4
 
+DYNAMO_TABLE_NAME = environ.get("DYNAMO_TABLE_NAME")
 
-ENVIRONMENT = environ.get("ENVIRONMENT", "dev")
-if "prod" == ENVIRONMENT:
+if DYNAMO_TABLE_NAME:
     import boto3
 
     dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('efortuna-csgo-bets')
+    table = dynamodb.Table(DYNAMO_TABLE_NAME)
 
 URL = "https://www.efortuna.pl/zaklady-bukmacherskie/esport-cs-go"
 
@@ -37,15 +43,21 @@ def parse_events(html: str):
     timestamps_list = [parse_date(date) for date in root.find_all(
         "td", {"class": "col-date"})]
 
-    results = [{
-        "bookmakerName": "efortuna",
-        "gameName": "CS:GO",
-        "eventURL": event[0],
-        "eventID": event[1],
-        "eventName": event[2],
-        "eventTimestamp": timestamp}
-        for event, timestamp in zip(events_list, timestamps_list)]
+    results = [build_match_object(event[2], timestamp, event[0])
+               for event, timestamp in zip(events_list, timestamps_list)]
     return results
+
+
+def build_match_object(name: str, date: str, url: str) -> dict:
+    match_obj = {
+        "id": str(uuid4()),
+        "dataSource": "efortuna",
+        "gameName": "CS:GO",
+        "eventName": name,
+        "eventURL": url,
+        "eventTimestamp": date,
+    }
+    return match_obj
 
 
 def parse_competition(competition):
@@ -66,7 +78,7 @@ def parse_event(event):
         e_href = event.attrs["href"]
         e_data_id = event.attrs["data-id"]
         # Todo: This field has to be normalized
-        e_name = event.parent.attrs["data-value"]
+        e_name = event.parent.attrs["data-value"].lower()
 
         return (e_href, e_data_id, e_name)
     except KeyError as err:
@@ -82,13 +94,26 @@ def parse_date(date):
         return None
 
 
+def upsert_db_item(event):
+    response = table.scan(
+        FilterExpression=Attr("dataSource").eq("game-tournaments") &
+                         Attr("eventSHA").eq(event["eventSHA"]))
+    if response["Items"]:
+        table.delete_item(Key={"id": response["Items"][0]["id"]})
+
+    # Todo: Consider using update
+    table.put_item(Item=event)
+
+
 def handler(event, ctx):
     loop = asyncio.get_event_loop()
     html_page = loop.run_until_complete(fetch_page())
     results = parse_events(html_page)
 
-    if "prod" == ENVIRONMENT:
+    if DYNAMO_TABLE_NAME:
         for r in results:
-            table.put_item(Item=r)
+            upsert_db_item(r)
 
     return {"statusCode": 200}
+
+handler(None,None)
